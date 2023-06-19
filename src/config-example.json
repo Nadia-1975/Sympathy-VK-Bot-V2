@@ -1,0 +1,16 @@
+{
+    "bot_params":{
+      "group_token": "",
+      "group_id": "",
+      "user_token": "",
+      "user_id": ""
+    },
+    "db_params":{
+      "db_type": "postgresql",
+      "login": "postgres",
+      "password": "1234",
+      "host": "localhost",
+      "port": "5432",
+      "database": "db_vk_sympathy"
+    }
+}
