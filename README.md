@@ -22,4 +22,4 @@
 2.	[Хомутов В. Листинги кода с консультации.](https://github.com/VladimirKhomutov/consultation_20042023)
 3.	[Purpleghoul](https://github.com/Purpleghoul/VKinder/tree/main)
 4.	[Google](Google.com)
-5.	[Яндек](ya.ru)
+5.	[Яндекс](ya.ru)
