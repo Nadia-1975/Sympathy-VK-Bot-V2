@@ -1,16 +1,18 @@
 import os
 import json
-import random
-
 import vk_api
+from sqlalchemy import create_engine
 from sqlalchemy.exc import IntegrityError, InvalidRequestError, PendingRollbackError
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy_utils import database_exists, create_database
 from vk_api.longpoll import VkLongPoll, VkEventType
-from vk_api.keyboard import VkKeyboard, VkKeyboardColor
-from database import *
 from datetime import datetime
 
 __location__ = os.path.realpath(os.path.join(os.getcwd(), os.path.dirname(__file__)))
-with open(os.path.join(__location__, './config.json')) as config_file:
+
+from database import drop_tables, create_tables, User, FavList, OfferedUser, BlackList
+
+with open(os.path.join(__location__, './config-example.json')) as config_file:
     config_dict = json.load(config_file)
 
 db_type = config_dict['db_params']['db_type']
@@ -30,12 +32,12 @@ session_db = Session_db()
 
 # создаем базу
 if not database_exists(engine.url):
+    print("Create DB")
     create_database(engine.url)
-
-# очищаем существующие таблицы
-drop_tables(engine)
-# создаем таблицы
-create_tables(engine)
+    # очищаем существующие таблицы
+    drop_tables(engine)
+    # создаем таблицы
+    create_tables(engine)
 
 vk_chatter = vk_api.VkApi(token=bot_token)
 vk_searcher = vk_api.VkApi(token=user_token)
@@ -43,7 +45,7 @@ vk_bot = VkLongPoll(vk_chatter)
 
 
 # механика получения данных от пользователя, который пишет боту
-def get_user_info(user_id):
+def get_user_info(user_id, flag=None):
     user_info = {}
     resp = vk_chatter.method('users.get',
                              {'user_id': user_id,
@@ -52,19 +54,40 @@ def get_user_info(user_id):
     if resp is not None:
         for k, v in resp[0].items():
             if k == 'city':
-                user_info[k] = v['id']
+                if v == '':
+                    if flag is None:
+                        send_message(user_id, f'Введите город', None)
+                        for event in vk_bot.listen():
+                            if event.type == VkEventType.MESSAGE_NEW and event.to_me:
+                                user_info['city'] = city_id(event.text)[0]['id']
+                                break
+                else:
+                    user_info[k] = v['id']
             elif k == 'bdate':
                 if len(v.split('.')) != 3:
-                    user_info['age'] = 0
+                    send_message(user_id, f'Введите дату рождения в формате "ДД.ММ.ГГГГ"', None)
+                    for event in vk_bot.listen():
+                        if event.type == VkEventType.MESSAGE_NEW and event.to_me:
+                            user_info['age'] = datetime.now().year - int(event.text[-4:])
+                            break
                 else:
                     user_info['age'] = datetime.now().year - int(v[-4:])
             else:
                 user_info[k] = v
-                user_info['city'] = 125
+
+        if 'city' not in user_info.keys():
+            if flag is None:
+                send_message(user_id, f'Введите город', None)
+                for event in vk_bot.listen():
+                    if event.type == VkEventType.MESSAGE_NEW and event.to_me:
+                        user_info['city'] = city_id(event.text)[0]['id']
+                        break
+        user_info['offset'] = 0
         return user_info
     else:
+        print('ERROR 1')
         send_message(user_info['id'], 'Ошибка 1')
-        return 1
+        return False
 
 
 def db_add_user_info(user_info):
@@ -72,21 +95,39 @@ def db_add_user_info(user_info):
         user_db_record = session_db.query(User).filter_by(id=user_info['id']).scalar()
         if not user_db_record:
             user_db_record = User(id=user_info['id'],
-                                  first_name=user_info['first_name'],
-                                  last_name=user_info['last_name'],
                                   age=user_info['age'],
+                                  city=user_info['city'],
                                   sex=user_info['sex'],
-                                  city=user_info['city'])
+                                  offset=user_info['offset'])
         session_db.add(user_db_record)
         session_db.commit()
-        return 0
+        print("user_info added to main_user db")
+        return True
+    print('ERROR 2')
     send_message(user_info['id'], 'Ошибка 2')
-    return 1
+    return False
+
+
+def db_get_user_info(user_id):
+    db_user = session_db.query(User).order_by(User.user_id).all()
+    if db_user:
+        for item in db_user:
+            if str(item.id) == user_id:
+                user_info = {
+                    'id': int(item.id),
+                    'age': int(item.age),
+                    'city': int(item.city),
+                    'sex': int(item.sex),
+                    'offset': int(item.offset)
+                }
+                return user_info
+    else:
+        return False
 
 
 # ищем пару в соответствии с параметрами пользователя
 def offered_users_search(user_info):
-    resp = vk_searcher.method('users.search', {
+    post = {
         'age_from': user_info['age'] - 5,
         'age_to': user_info['age'] + 5,
         'city': user_info['city'],
@@ -95,21 +136,26 @@ def offered_users_search(user_info):
         'status': 1,
         'has_photo': 1,
         'count': 50,
-        'v': 5.131})
+        'v': 5.131,
+        'offset': user_info['offset']
+    }
+
+    resp = vk_searcher.method('users.search', post)
     if resp and resp.get('items'):
         offered_users_list = []
         for offered_user in resp.get('items'):
-            if offered_user.get('is_closed') != True:
-                temp = get_user_info(offered_user.get('id'))
-                if temp['age'] != 0 and 'city' in temp and temp['city'] == user_info['city']:
+            if not offered_user.get('is_closed'):
+                temp = get_user_info(offered_user.get('id'),flag=True)
+                if temp['age'] != 0 and temp.get('city') and temp['city'] == user_info['city']:
                     temp['vk_link'] = 'vk.com/id' + str(temp['id'])
                     offered_users_list.append(temp)
-                    print(temp)
+                    print('Offered user:\t', temp)
             else:
                 continue
         return offered_users_list
+    print('ERROR 3')
     send_message(user_info['id'], 'Ошибка 3')
-    return 1
+    return False
 
 
 def get_offered_user_photos(user_id, offer_id):
@@ -132,15 +178,8 @@ def get_offered_user_photos(user_id, offer_id):
                 count += 1
                 if count == 3:
                     return photos_list
+    print('ERROR 4')
     send_message(user_id, 'Ошибка 4')
-    return 1
-
-
-# выбираем случайный аккаунт из полученного списка
-def get_random_user(users_data, user_id):
-    if users_data:
-        return random.choice(users_data)
-    send_message(user_id, 'Ошибка')
     return False
 
 
@@ -148,40 +187,28 @@ def db_add_offered_user_info(users_data, user_id):
     try:
         users_record = session_db.query(OfferedUser).filter_by(id=users_data['id']).scalar()
         if not users_record:
-            users_record = OfferedUser(id=users_data['id'],
-                                       first_name=users_data['first_name'],
-                                       last_name=users_data['last_name'],
-                                       age=users_data['age'],
-                                       sex=users_data['sex'],
-                                       city=users_data['city'],
-                                       offered_to_user_id=user_id)
+            users_record = OfferedUser(id=users_data['id'])
         session_db.add(users_record)
         session_db.commit()
         return 0
     except (IntegrityError, InvalidRequestError, PendingRollbackError, TypeError):
         session_db.rollback()
-        print("ERROR 5")
-        print(users_data)
+        print("ERROR 5\t", "users_data:\t", users_data)
         send_message(user_id, 'Ошибка 5')
-        return 1
+        return False
 
 
 # заполняем таблицу избранного
 def db_add_fav_user_info(users_data):
-    print("\n\n\nFAV\n\n\n", users_data)
-    random_user_record = session_db.query(FavList).filter_by(id=users_data['id']).scalar()
-    if not random_user_record:
-        random_user_record = FavList(id=users_data['id'],
-                                     first_name=users_data['first_name'],
-                                     last_name=users_data['last_name'],
-                                     vk_link=users_data['vk_link'],
-                                     age=users_data['age'],
-                                     sex=users_data['sex'],
-                                     city=users_data['city']
-                                     )
-    session_db.add(random_user_record)
+    user_record = session_db.query(FavList).filter_by(id=users_data['id']).scalar()
+    if not user_record:
+        user_record = FavList(id=users_data['id'],
+                              vk_link=users_data['vk_link'],
+                              first_name=users_data['first_name'],
+                              last_name=users_data['last_name'])
+    session_db.add(user_record)
     session_db.commit()
-    return 0
+    return True
 
 
 # заполняем таблицу отсеянных пользователей (что бы не повторялись предложения)
@@ -191,7 +218,7 @@ def db_add_blocked_user_info(users_data):
         random_user_record = BlackList(id=users_data['id'])
     session_db.add(random_user_record)
     session_db.commit()
-    return 0
+    return True
 
 
 # выдаем список избранных пользователю
@@ -200,14 +227,38 @@ def db_get_fav_users_info(user_id):
     all_users = []
     if db_favorites:
         for item in db_favorites:
-            print(item)
-            all_users.append([item.user_id, 'id:' + str(item.id), item.first_name + ' ' + item.last_name, item.vk_link + ' '])
+            all_users.append(
+                [item.user_id, 'id:' + str(item.id), item.first_name + ' ' + item.last_name, item.vk_link + ' '])
         return all_users
     else:
         send_message(user_id, 'Ошибка, вы еще никого не добавили в список избранных')
-        print("ERROR 6")
-        print(db_favorites)
-    return 1
+        print("ERROR 6\t", "db_favorites:\t", db_favorites)
+        return False
+
+
+def db_get_offered_users_info():
+    db_offered = session_db.query(OfferedUser).order_by(OfferedUser.user_id).all()
+    all_users = []
+    if db_offered:
+        for item in db_offered:
+            all_users.append(item.id)
+        return all_users
+    else:
+        return []
+
+
+def city_id(city_name):
+    resp = vk_searcher.method('database.getCities', {
+        'country_id': 1,
+        'q': f'{city_name}',
+        'need_all': 0,
+        'count': 1000,
+        'v': 5.131})
+    if resp:
+        if resp.get('items'):
+            return resp.get('items')
+        send_message(city_name, 'Ошибка ввода города')
+        return False
 
 
 # механика отправки сообщений пользователю

@@ -12,11 +12,10 @@ class User(Base):
     __tablename__ = 'main_user'
     user_id = sql.Column(sql.Integer, primary_key=True)
     id = sql.Column(sql.Integer, unique=True)
-    first_name = sql.Column(sql.String)
-    last_name = sql.Column(sql.String)
-    sex = sql.Column(sql.String)
-    city = sql.Column(sql.Integer)
     age = sql.Column(sql.Integer)
+    city = sql.Column(sql.Integer)
+    sex = sql.Column(sql.Integer)
+    offset = sql.Column(sql.Integer)
 
     def __str__(self):
         return f'MainUser {self.id}: {self.user_id}: {self.city}: {self.age}'
@@ -26,12 +25,6 @@ class OfferedUser(Base):
     __tablename__ = 'offered_user'
     user_id = sql.Column(sql.Integer, primary_key=True)
     id = sql.Column(sql.Integer, unique=True)
-    offered_to_user_id = sql.Column(sql.Integer)
-    first_name = sql.Column(sql.String)
-    last_name = sql.Column(sql.String)
-    sex = sql.Column(sql.String)
-    city = sql.Column(sql.Integer)
-    age = sql.Column(sql.Integer)
 
     def __str__(self):
         return f'OfferedUser {self.id}: {self.user_id}: {self.city}: {self.age}'
@@ -43,9 +36,6 @@ class FavList(Base):
     id = sql.Column(sql.Integer, unique=True)
     first_name = sql.Column(sql.String, nullable=False)
     last_name = sql.Column(sql.String, nullable=False)
-    age = sql.Column(sql.Integer)
-    sex = sql.Column(sql.String)
-    city = sql.Column(sql.Integer)
     vk_link = sql.Column(sql.String, unique=True, nullable=False)
 
     def __str__(self):
